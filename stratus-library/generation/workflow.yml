@@ -1,0 +1,186 @@
+name: Stratus generation and Azure validation
+run-name: stratus-generation-${{ inputs.job_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      job_id:
+        { description: Stratus generation job ID, required: true, type: string }
+      prompt:
+        {
+          description: VM generation requirements,
+          required: true,
+          type: string,
+        }
+      target:
+        {
+          description: Reviewed Azure test target JSON,
+          required: true,
+          type: string,
+        }
+permissions:
+  contents: read
+concurrency:
+  group: stratus-generation-${{ inputs.job_id }}
+  cancel-in-progress: false
+env:
+  STRATUS_JOB_ID: ${{ inputs.job_id }}
+  STRATUS_TARGET: ${{ inputs.target }}
+  STRATUS_ALLOWED_SUBSCRIPTIONS: ${{ vars.STRATUS_VALIDATION_SUBSCRIPTIONS }}
+jobs:
+  generate:
+    name: Generate candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - name: Generate six implementations
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
+          STRATUS_PROMPT: ${{ inputs.prompt }}
+        run: node stratus-library/generation/generate.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          {
+            name: candidate,
+            path: candidate/files.json,
+            retention-days: 7,
+            if-no-files-found: error,
+          }
+  test:
+    name: Test ${{ matrix.engine }}
+    needs: generate
+    environment: stratus-validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        engine: [powershell, arm, bicep, terraform, dsc, ansible]
+    env:
+      STRATUS_ENGINE: ${{ matrix.engine }}
+      ARM_CLIENT_ID: ${{ fromJSON(inputs.target).clientId }}
+      ARM_TENANT_ID: ${{ fromJSON(inputs.target).tenantId }}
+      ARM_SUBSCRIPTION_ID: ${{ fromJSON(inputs.target).subscriptionId }}
+      ARM_USE_OIDC: "true"
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/download-artifact@v4
+        with: { name: candidate, path: candidate }
+      - run: node stratus-library/generation/apply-candidate.mjs
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ fromJSON(inputs.target).clientId }}
+          tenant-id: ${{ fromJSON(inputs.target).tenantId }}
+          subscription-id: ${{ fromJSON(inputs.target).subscriptionId }}
+          enable-AzPSSession: true
+      - name: Create isolated test group
+        run: node stratus-library/generation/sandbox.mjs prepare
+      - uses: hashicorp/setup-terraform@v3
+        if: matrix.engine == 'terraform'
+        with: { terraform_version: "1.12.2", terraform_wrapper: false }
+      - name: Deploy ARM or Bicep
+        if: matrix.engine == 'arm' || matrix.engine == 'bicep'
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG=$(jq -r .resourceGroup parameters.json)
+          TEMPLATE=stratus-library/arm/virtual-machine/main.json
+          if [ "$STRATUS_ENGINE" = bicep ]; then
+            az bicep build --file stratus-library/bicep/virtual-machine/main.bicep --outfile compiled.json
+            TEMPLATE=compiled.json
+          fi
+          az deployment group validate -g "$RG" --template-file "$TEMPLATE" --parameters @arm.parameters.json --output none
+          az deployment group create -g "$RG" --name smoke-test --template-file "$TEMPLATE" --parameters @arm.parameters.json --mode Incremental --output none
+      - name: Deploy Terraform
+        if: matrix.engine == 'terraform'
+        working-directory: stratus-library/terraform/virtual-machine
+        run: |
+          terraform init -input=false
+          terraform validate
+          terraform plan -input=false -out=smoke.tfplan
+          terraform apply -input=false smoke.tfplan
+      - name: Deploy PowerShell
+        if: matrix.engine == 'powershell'
+        shell: pwsh
+        run: ./stratus-library/powershell/virtual-machine/deploy.ps1 -ParametersFile ./parameters.json
+      - name: Deploy DSC
+        if: matrix.engine == 'dsc'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --output dsc.tar.gz https://github.com/PowerShell/DSC/releases/download/v3.1.0/DSC-3.1.0-x86_64-linux.tar.gz
+          mkdir -p "$RUNNER_TEMP/dsc"
+          tar -xzf dsc.tar.gz -C "$RUNNER_TEMP/dsc"
+          export DSC_RESOURCE_PATH="$PWD/stratus-library/dsc/virtual-machine"
+          PARAMS="$PWD/dsc.parameters.json"
+          cd stratus-library/dsc/virtual-machine
+          "$RUNNER_TEMP/dsc/dsc" config --parameters-file "$PARAMS" set --file vm.dsc.json
+      - name: Deploy Ansible
+        if: matrix.engine == 'ansible'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/ansible"
+          source "$RUNNER_TEMP/ansible/bin/activate"
+          pip install 'ansible-core==2.18.6'
+          ansible-galaxy collection install -r stratus-library/ansible/virtual-machine/requirements.yml
+          pip install -r "$HOME/.ansible/collections/ansible_collections/azure/azcollection/requirements.txt"
+          export STRATUS_PARAMETERS_FILE="$PWD/parameters.json"
+          ansible-playbook stratus-library/ansible/virtual-machine/playbook.yml
+      - name: Verify temporary VM
+        run: node stratus-library/generation/sandbox.mjs verify
+      - name: Delete temporary test group
+        if: always()
+        run: node stratus-library/generation/sandbox.mjs cleanup-one
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          {
+            name: "validation-${{ matrix.engine }}",
+            path: validation-results,
+            retention-days: 7,
+            if-no-files-found: ignore,
+          }
+  cleanup:
+    name: Cleanup sandbox
+    if: always()
+    needs: [generate, test]
+    environment: stratus-validation
+    runs-on: ubuntu-24.04
+    timeout-minutes: 170
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ fromJSON(inputs.target).clientId }}
+          tenant-id: ${{ fromJSON(inputs.target).tenantId }}
+          subscription-id: ${{ fromJSON(inputs.target).subscriptionId }}
+      - name: Confirm every test group is deleted
+        run: node stratus-library/generation/sandbox.mjs cleanup
+  publish:
+    name: Publish review
+    needs: [generate, test, cleanup]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@v4
+        with: { persist-credentials: false }
+      - uses: actions/download-artifact@v4
+        with: { name: candidate, path: candidate }
+      - name: Create draft pull request after validation and cleanup
+        env: { GH_TOKEN: "${{ github.token }}" }
+        run: node stratus-library/generation/publish.mjs
