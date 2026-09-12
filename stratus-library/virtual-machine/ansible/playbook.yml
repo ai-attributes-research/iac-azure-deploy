@@ -1,0 +1,52 @@
+---
+- name: Create private Ubuntu VM
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars_files:
+    - "{{ lookup('env', 'STRATUS_PARAMETERS_FILE') }}"
+  vars:
+    tags:
+      environment: "{{ environment }}"
+      managedBy: stratus
+  tasks:
+    - name: Create private NIC in existing subnet
+      azure.azcollection.azure_rm_networkinterface:
+        auth_source: cli
+        subscription_id: "{{ subscriptionId }}"
+        resource_group: "{{ resourceGroup }}"
+        name: "{{ vmName }}-nic"
+        location: "{{ location }}"
+        virtual_network: "{{ subnetId.split('/subnets/')[0] }}"
+        subnet_name: "{{ subnetId.split('/')[-1] }}"
+        create_with_security_group: false
+        ip_configurations:
+          - name: private
+            private_ip_allocation_method: Dynamic
+            primary: true
+        tags: "{{ tags }}"
+    - name: Create Ubuntu VM
+      azure.azcollection.azure_rm_virtualmachine:
+        auth_source: cli
+        subscription_id: "{{ subscriptionId }}"
+        resource_group: "{{ resourceGroup }}"
+        name: "{{ vmName }}"
+        location: "{{ location }}"
+        vm_size: "{{ vmSize }}"
+        admin_username: "{{ adminUsername }}"
+        ssh_password_enabled: false
+        ssh_public_keys:
+          - path: "/home/{{ adminUsername }}/.ssh/authorized_keys"
+            key_data: "{{ sshPublicKey }}"
+        network_interfaces: "{{ vmName }}-nic"
+        os_disk_name: "{{ vmName }}-os"
+        os_disk_size_gb: "{{ osDiskSizeGb | int }}"
+        managed_disk_type: StandardSSD_LRS
+        image:
+          publisher: Canonical
+          offer: ubuntu-24_04-lts
+          sku: server
+          version: latest
+        boot_diagnostics:
+          enabled: true
+        tags: "{{ tags }}"

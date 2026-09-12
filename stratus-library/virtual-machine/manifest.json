@@ -1,0 +1,27 @@
+{
+  "schemaVersion": 1,
+  "id": "virtual-machine",
+  "name": "Ubuntu virtual machine",
+  "description": "Ubuntu 24.04 LTS, a private network interface, and a managed OS disk. Uses an existing resource group and subnet. No public IP or inbound firewall rules are created.",
+  "version": "1.0.0",
+  "fields": [
+    {"key":"subscriptionId","label":"Subscription","type":"text","required":true,"group":"Basics","description":"The subscription where GitHub's deployment identity has access."},
+    {"key":"resourceGroup","label":"Resource group","type":"text","required":true,"group":"Basics","description":"An existing resource group; Stratus does not create it."},
+    {"key":"vmName","label":"Virtual machine name","type":"text","required":true,"group":"Basics","description":"2–63 lowercase letters, numbers, and hyphens."},
+    {"key":"location","label":"Region","type":"text","required":true,"group":"Basics","description":"Must match the existing virtual network's region.","default":"southeastasia"},
+    {"key":"environment","label":"Environment","type":"select","required":true,"group":"Basics","description":"Applied as an Azure resource tag.","default":"development","options":["development","staging","production"]},
+    {"key":"vmSize","label":"VM size","type":"text","required":true,"group":"Compute","description":"Availability and quota are checked by Azure during deployment.","default":"Standard_B2s"},
+    {"key":"osDiskSizeGb","label":"OS disk size (GiB)","type":"number","required":true,"group":"Compute","description":"Standard SSD managed disk. This template creates new VMs only.","default":32,"min":32,"max":2048},
+    {"key":"adminUsername","label":"Administrator username","type":"text","required":true,"group":"Access","description":"SSH password authentication is disabled.","default":"azureuser"},
+    {"key":"sshPublicKey","label":"SSH public key","type":"ssh","required":true,"group":"Access","description":"Paste your RSA public key (ssh-rsa ...). Never paste a private key. AI will not invent a key."},
+    {"key":"subnetId","label":"Existing subnet resource ID","type":"text","required":true,"group":"Network","description":"An existing subnet in the same subscription and region. Network access follows that subnet's policies."}
+  ],
+  "implementations": [
+    {"engine":"bicep","entry":"stratus-library/virtual-machine/bicep/main.bicep","description":"Compiles Bicep and deploys through Azure Resource Manager."},
+    {"engine":"terraform","entry":"stratus-library/virtual-machine/terraform/main.tf","description":"AzureRM provider with remote Azure Blob state and a saved plan."},
+    {"engine":"arm","entry":"stratus-library/virtual-machine/arm/main.json","description":"Native Azure Resource Manager JSON template."},
+    {"engine":"powershell","entry":"stratus-library/virtual-machine/powershell/deploy.ps1","description":"Az PowerShell cmdlets create the NIC and Linux VM."},
+    {"engine":"dsc","entry":"stratus-library/virtual-machine/dsc/vm.dsc.json","description":"DSC v3 command resource manages the VM through the shared ARM template."},
+    {"engine":"ansible","entry":"stratus-library/virtual-machine/ansible/playbook.yml","description":"Azure collection provisions the NIC and VM using the Azure CLI identity."}
+  ]
+}

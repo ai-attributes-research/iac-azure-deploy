@@ -1,0 +1,9 @@
+{
+  "$schema": "https://aka.ms/dsc/schemas/v3/bundled/resource/manifest.json",
+  "type": "Stratus.Azure/VirtualMachine",
+  "version": "1.0.0",
+  "description": "Private Ubuntu VM provisioned with the shared ARM template.",
+  "get": {"executable":"node","args":["resource.mjs","get"],"input":"stdin"},
+  "set": {"executable":"node","args":["resource.mjs","set"],"input":"stdin","return":"state"},
+  "schema": {"embedded":{"type":"object","required":["parameters"],"properties":{"parameters":{"type":"object"}},"additionalProperties":false}}
+}

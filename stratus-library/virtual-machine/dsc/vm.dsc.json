@@ -1,0 +1,5 @@
+{
+  "$schema":"https://aka.ms/dsc/schemas/v3/bundled/config/document.json",
+  "parameters":{"vm":{"type":"object"}},
+  "resources":[{"name":"Ubuntu virtual machine","type":"Stratus.Azure/VirtualMachine","properties":{"parameters":"[parameters('vm')]"}}]
+}

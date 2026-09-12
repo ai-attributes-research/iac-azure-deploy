@@ -1,0 +1,172 @@
+name: Stratus deployment
+run-name: stratus-${{ inputs.request_id }}
+on:
+  workflow_dispatch:
+    inputs:
+      request_id:
+        { description: "Stratus review ID", required: true, type: string }
+      engine:
+        {
+          description: "Implementation",
+          required: true,
+          type: choice,
+          options: [bicep, terraform, arm, powershell, dsc, ansible],
+        }
+      resource:
+        {
+          description: "Template",
+          required: true,
+          type: choice,
+          options: [virtual-machine],
+        }
+      parameters:
+        {
+          description: "Validated non-secret parameters (JSON)",
+          required: true,
+          type: string,
+        }
+      azure_client_id:
+        {
+          description: "Reviewed workload identity client ID",
+          required: true,
+          type: string,
+        }
+      azure_tenant_id:
+        {
+          description: "Reviewed Azure tenant ID",
+          required: true,
+          type: string,
+        }
+      azure_subscription_id:
+        {
+          description: "Reviewed Azure subscription ID",
+          required: true,
+          type: string,
+        }
+permissions:
+  contents: read
+concurrency:
+  group: stratus-${{ fromJSON(inputs.parameters).subscriptionId }}-${{ fromJSON(inputs.parameters).resourceGroup }}-${{ fromJSON(inputs.parameters).vmName }}
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    environment: stratus
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      STRATUS_INPUTS: ${{ inputs.parameters }}
+      STRATUS_ENGINE: ${{ inputs.engine }}
+      AZURE_SUBSCRIPTION_ID: ${{ inputs.azure_subscription_id }}
+      ARM_SUBSCRIPTION_ID: ${{ inputs.azure_subscription_id }}
+      ARM_TENANT_ID: ${{ inputs.azure_tenant_id }}
+      ARM_CLIENT_ID: ${{ inputs.azure_client_id }}
+      ARM_USE_OIDC: "true"
+      ARM_USE_AZUREAD: "true"
+      TF_STORAGE_ACCOUNT: ${{ vars.TF_STORAGE_ACCOUNT }}
+      TF_STORAGE_CONTAINER: ${{ vars.TF_STORAGE_CONTAINER }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Prepare inputs
+        run: node stratus-library/runner/prepare.mjs
+      - uses: azure/login@v2
+        with:
+          client-id: ${{ inputs.azure_client_id }}
+          tenant-id: ${{ inputs.azure_tenant_id }}
+          subscription-id: ${{ inputs.azure_subscription_id }}
+          enable-AzPSSession: true
+      - name: Check target and prevent overwrite
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG=$(jq -r .resourceGroup parameters.json)
+          VM=$(jq -r .vmName parameters.json)
+          SUBNET=$(jq -r .subnetId parameters.json)
+          az group show --name "$RG" --output none
+          az network vnet subnet show --ids "$SUBNET" --output none
+          az resource list --resource-group "$RG" --output json > existing-resources.json
+          node stratus-library/runner/preflight.mjs
+      - uses: hashicorp/setup-terraform@v3
+        if: inputs.engine == 'terraform'
+        with:
+          terraform_version: "1.12.2"
+          terraform_wrapper: false
+      - name: Deploy ARM or Bicep
+        if: inputs.engine == 'arm' || inputs.engine == 'bicep'
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG=$(jq -r .resourceGroup parameters.json)
+          VM=$(jq -r .vmName parameters.json)
+          TEMPLATE=stratus-library/virtual-machine/arm/main.json
+          if [ "$STRATUS_ENGINE" = bicep ]; then
+            az bicep build --file stratus-library/virtual-machine/bicep/main.bicep --outfile compiled.json
+            TEMPLATE=compiled.json
+          fi
+          az deployment group validate --resource-group "$RG" --template-file "$TEMPLATE" --parameters @arm.parameters.json --output none
+          az deployment group create --resource-group "$RG" --name "stratus-$VM" --template-file "$TEMPLATE" --parameters @arm.parameters.json --mode Incremental --output json
+      - name: Deploy Terraform
+        if: inputs.engine == 'terraform'
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "$TF_STORAGE_ACCOUNT" && test -n "$TF_STORAGE_CONTAINER"
+          KEY=$(jq -r '[.subscriptionId,.resourceGroup,.vmName] | join("/")' parameters.json)
+          cd stratus-library/virtual-machine/terraform
+          terraform init -input=false -backend-config="storage_account_name=$TF_STORAGE_ACCOUNT" -backend-config="container_name=$TF_STORAGE_CONTAINER" -backend-config="key=$KEY.tfstate" -backend-config=use_oidc=true -backend-config=use_azuread_auth=true
+          terraform validate
+          terraform plan -input=false -out=stratus.tfplan
+          terraform apply -input=false stratus.tfplan
+      - name: Deploy PowerShell
+        if: inputs.engine == 'powershell'
+        shell: pwsh
+        run: ./stratus-library/virtual-machine/powershell/deploy.ps1 -ParametersFile ./parameters.json
+      - name: Install DSC v3
+        if: inputs.engine == 'dsc'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl --fail --location --output dsc.tar.gz https://github.com/PowerShell/DSC/releases/download/v3.1.0/DSC-3.1.0-x86_64-linux.tar.gz
+          mkdir -p "$RUNNER_TEMP/dsc"
+          tar -xzf dsc.tar.gz -C "$RUNNER_TEMP/dsc"
+          echo "$RUNNER_TEMP/dsc" >> "$GITHUB_PATH"
+      - name: Deploy DSC
+        if: inputs.engine == 'dsc'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export DSC_RESOURCE_PATH="$PWD/stratus-library/virtual-machine/dsc"
+          PARAMS="$PWD/dsc.parameters.json"
+          cd stratus-library/virtual-machine/dsc
+          dsc config --parameters-file "$PARAMS" set --file vm.dsc.json
+      - name: Install Ansible and Azure collection
+        if: inputs.engine == 'ansible'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m venv "$RUNNER_TEMP/ansible"
+          source "$RUNNER_TEMP/ansible/bin/activate"
+          pip install 'ansible-core==2.18.6'
+          ansible-galaxy collection install -r stratus-library/virtual-machine/ansible/requirements.yml
+          pip install -r "$HOME/.ansible/collections/ansible_collections/azure/azcollection/requirements.txt"
+          echo "$RUNNER_TEMP/ansible/bin" >> "$GITHUB_PATH"
+      - name: Deploy Ansible
+        if: inputs.engine == 'ansible'
+        shell: bash
+        run: |
+          set -euo pipefail
+          export STRATUS_PARAMETERS_FILE="$PWD/parameters.json"
+          ansible-playbook stratus-library/virtual-machine/ansible/playbook.yml
+      - name: Verify provisioned VM
+        shell: bash
+        run: |
+          set -euo pipefail
+          RG=$(jq -r .resourceGroup parameters.json)
+          VM=$(jq -r .vmName parameters.json)
+          az vm show --resource-group "$RG" --name "$VM" --query '{id:id,state:provisioningState}' --output json
+          STATE=$(az vm show --resource-group "$RG" --name "$VM" --query provisioningState -o tsv)
+          test "$STATE" = Succeeded
