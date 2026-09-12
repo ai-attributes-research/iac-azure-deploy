@@ -17,11 +17,11 @@
     {"key":"subnetId","label":"Existing subnet resource ID","type":"text","required":true,"group":"Network","description":"An existing subnet in the same subscription and region. Network access follows that subnet's policies."}
   ],
   "implementations": [
-    {"engine":"bicep","entry":"stratus-library/virtual-machine/bicep/main.bicep","description":"Compiles Bicep and deploys through Azure Resource Manager."},
-    {"engine":"terraform","entry":"stratus-library/virtual-machine/terraform/main.tf","description":"AzureRM provider with remote Azure Blob state and a saved plan."},
-    {"engine":"arm","entry":"stratus-library/virtual-machine/arm/main.json","description":"Native Azure Resource Manager JSON template."},
-    {"engine":"powershell","entry":"stratus-library/virtual-machine/powershell/deploy.ps1","description":"Az PowerShell cmdlets create the NIC and Linux VM."},
-    {"engine":"dsc","entry":"stratus-library/virtual-machine/dsc/vm.dsc.json","description":"DSC v3 command resource manages the VM through the shared ARM template."},
-    {"engine":"ansible","entry":"stratus-library/virtual-machine/ansible/playbook.yml","description":"Azure collection provisions the NIC and VM using the Azure CLI identity."}
+    {"engine":"bicep","entry":"stratus-library/bicep/virtual-machine/main.bicep","description":"Compiles Bicep and deploys through Azure Resource Manager."},
+    {"engine":"terraform","entry":"stratus-library/terraform/virtual-machine/main.tf","description":"AzureRM provider with remote Azure Blob state and a saved plan."},
+    {"engine":"arm","entry":"stratus-library/arm/virtual-machine/main.json","description":"Native Azure Resource Manager JSON template."},
+    {"engine":"powershell","entry":"stratus-library/powershell/virtual-machine/deploy.ps1","description":"Az PowerShell cmdlets create the NIC and Linux VM."},
+    {"engine":"dsc","entry":"stratus-library/dsc/virtual-machine/vm.dsc.json","description":"DSC v3 command resource manages the VM through the shared ARM template."},
+    {"engine":"ansible","entry":"stratus-library/ansible/virtual-machine/playbook.yml","description":"Azure collection provisions the NIC and VM using the Azure CLI identity."}
   ]
 }

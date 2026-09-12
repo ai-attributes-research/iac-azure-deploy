@@ -35,7 +35,7 @@ if (process.argv[2] === "set") {
     "--name",
     `stratus-${p.vmName}`,
     "--template-file",
-    resolve("../arm/main.json"),
+    resolve("../../arm/virtual-machine/main.json"),
     "--parameters",
     "@" + join(dir, "parameters.json"),
     "--mode",

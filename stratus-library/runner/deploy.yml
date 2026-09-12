@@ -102,9 +102,9 @@ jobs:
           set -euo pipefail
           RG=$(jq -r .resourceGroup parameters.json)
           VM=$(jq -r .vmName parameters.json)
-          TEMPLATE=stratus-library/virtual-machine/arm/main.json
+          TEMPLATE=stratus-library/arm/virtual-machine/main.json
           if [ "$STRATUS_ENGINE" = bicep ]; then
-            az bicep build --file stratus-library/virtual-machine/bicep/main.bicep --outfile compiled.json
+            az bicep build --file stratus-library/bicep/virtual-machine/main.bicep --outfile compiled.json
             TEMPLATE=compiled.json
           fi
           az deployment group validate --resource-group "$RG" --template-file "$TEMPLATE" --parameters @arm.parameters.json --output none
@@ -116,7 +116,7 @@ jobs:
           set -euo pipefail
           test -n "$TF_STORAGE_ACCOUNT" && test -n "$TF_STORAGE_CONTAINER"
           KEY=$(jq -r '[.subscriptionId,.resourceGroup,.vmName] | join("/")' parameters.json)
-          cd stratus-library/virtual-machine/terraform
+          cd stratus-library/terraform/virtual-machine
           terraform init -input=false -backend-config="storage_account_name=$TF_STORAGE_ACCOUNT" -backend-config="container_name=$TF_STORAGE_CONTAINER" -backend-config="key=$KEY.tfstate" -backend-config=use_oidc=true -backend-config=use_azuread_auth=true
           terraform validate
           terraform plan -input=false -out=stratus.tfplan
@@ -124,7 +124,7 @@ jobs:
       - name: Deploy PowerShell
         if: inputs.engine == 'powershell'
         shell: pwsh
-        run: ./stratus-library/virtual-machine/powershell/deploy.ps1 -ParametersFile ./parameters.json
+        run: ./stratus-library/powershell/virtual-machine/deploy.ps1 -ParametersFile ./parameters.json
       - name: Install DSC v3
         if: inputs.engine == 'dsc'
         shell: bash
@@ -139,9 +139,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          export DSC_RESOURCE_PATH="$PWD/stratus-library/virtual-machine/dsc"
+          export DSC_RESOURCE_PATH="$PWD/stratus-library/dsc/virtual-machine"
           PARAMS="$PWD/dsc.parameters.json"
-          cd stratus-library/virtual-machine/dsc
+          cd stratus-library/dsc/virtual-machine
           dsc config --parameters-file "$PARAMS" set --file vm.dsc.json
       - name: Install Ansible and Azure collection
         if: inputs.engine == 'ansible'
@@ -151,7 +151,7 @@ jobs:
           python -m venv "$RUNNER_TEMP/ansible"
           source "$RUNNER_TEMP/ansible/bin/activate"
           pip install 'ansible-core==2.18.6'
-          ansible-galaxy collection install -r stratus-library/virtual-machine/ansible/requirements.yml
+          ansible-galaxy collection install -r stratus-library/ansible/virtual-machine/requirements.yml
           pip install -r "$HOME/.ansible/collections/ansible_collections/azure/azcollection/requirements.txt"
           echo "$RUNNER_TEMP/ansible/bin" >> "$GITHUB_PATH"
       - name: Deploy Ansible
@@ -160,7 +160,7 @@ jobs:
         run: |
           set -euo pipefail
           export STRATUS_PARAMETERS_FILE="$PWD/parameters.json"
-          ansible-playbook stratus-library/virtual-machine/ansible/playbook.yml
+          ansible-playbook stratus-library/ansible/virtual-machine/playbook.yml
       - name: Verify provisioned VM
         shell: bash
         run: |

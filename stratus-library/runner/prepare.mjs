@@ -24,7 +24,7 @@ if (
   throw Error("Invalid disk size");
 writeFileSync("parameters.json", JSON.stringify(p));
 writeFileSync(
-  "stratus-library/virtual-machine/terraform/stratus.auto.tfvars.json",
+  "stratus-library/terraform/virtual-machine/stratus.auto.tfvars.json",
   JSON.stringify(p),
 );
 writeFileSync(
